@@ -1155,6 +1155,72 @@
           .join('\n');
       }
 
+
+      function extractExternalLinkCards(value) {
+        const cards = [];
+        const seenObjects = new WeakSet();
+        const seenUris = new Set();
+
+        function remember(external) {
+          if (!external || typeof external !== 'object') return;
+          const title = typeof external.title === 'string' ? external.title.trim() : '';
+          const description = typeof external.description === 'string' ? external.description.trim() : '';
+          if (!title && !description) return;
+          const uri = typeof external.uri === 'string' ? external.uri : '';
+          const key = uri || `${title}
+${description}`;
+          if (seenUris.has(key)) return;
+          seenUris.add(key);
+          cards.push({ uri, title, description });
+        }
+
+        function visit(node) {
+          if (!node || typeof node !== 'object') return;
+          if (seenObjects.has(node)) return;
+          seenObjects.add(node);
+
+          if (Array.isArray(node)) {
+            node.forEach(visit);
+            return;
+          }
+
+          if (node.$type === 'app.bsky.embed.external#view' && node.external) {
+            remember(node.external);
+          }
+
+          Object.values(node).forEach(visit);
+        }
+
+        visit(value);
+        return cards;
+      }
+
+      function getLinkCardDomain(uri) {
+        if (typeof uri !== 'string' || !uri.trim()) return '';
+        try {
+          return new URL(uri).hostname.replace(/^www\./i, '');
+        } catch (err) {
+          return '';
+        }
+      }
+
+      function formatExternalLinkCard(card) {
+        if (!card) return '';
+        const domain = getLinkCardDomain(card.uri);
+        const lines = [domain ? `[Link card from ${domain}]` : '[Link card]'];
+        if (card.title) lines.push(`Title: ${card.title}`);
+        if (card.description) lines.push(`Description: ${card.description}`);
+        lines.push('[End link card]');
+        return lines.join('\n');
+      }
+
+      function externalLinkCardTextFromValue(value) {
+        return extractExternalLinkCards(value)
+          .map(formatExternalLinkCard)
+          .filter(Boolean)
+          .join('\n');
+      }
+
       function isReplyToUri(post, parentUri) {
         return !!(post && post.record && post.record.reply &&
           post.record.reply.parent && post.record.reply.parent.uri === parentUri);
@@ -1207,8 +1273,9 @@
         const handle = author.handle ? ` (@${author.handle})` : '';
         const quotedText = quoted.value && quoted.value.text ? quoted.value.text.trim() : '';
         const quotedLines = quotedText || '[Quoted post has no text]';
+        const quotedLinkCardText = externalLinkCardTextFromValue(quoted);
         const quotedAltText = formatImageAltTexts(extractImageAltTexts(quoted));
-        return [`[Quoted post by ${authorName}${handle}]`, quotedLines, quotedAltText, '[End quote post]']
+        return [`[Quoted post by ${authorName}${handle}]`, quotedLines, quotedLinkCardText, quotedAltText, '[End quote post]']
           .filter(Boolean)
           .join('\n');
       }
@@ -1286,6 +1353,9 @@
 
         const imageAltText = formatImageAltTexts(extractImageAltTexts(item.post));
         if (imageAltText) parts.push(imageAltText);
+
+        const externalLinkCardText = externalLinkCardTextFromValue(item.post);
+        if (externalLinkCardText) parts.push(externalLinkCardText);
 
         const quotedText = quotedTextFromPost(item.post);
         if (quotedText) parts.push(quotedText);
