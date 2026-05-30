@@ -425,6 +425,12 @@
   </dialog>
   <header>
     <h1>Bluesky Thread Viewer</h1>
+    <p>
+       Drag this bookmarklet to your toolbar to unroll or inspect a Bluesky thread from the first post.
+    </p>
+    <p>
+       Bookmarklet:        <a href="javascript:(function()%7Bjavascript%3A%20(function()%20%7B%0A%20%20%20%20%20%20%20%20var%20currentUrl%20%3D%20window.location.href%3B%0A%20%20%20%20%20%20%20%20var%20openUrl%20%3D%20%22https%3A%2F%2Fcolarusso.github.io%2Fbluesky-thread%2F%3Furl%3D%22%20%2B%20encodeURIComponent(currentUrl)%3B%0A%20%20%20%20%20%20%20%20window.open(openUrl%2C%20'_blank')%3B%0A%7D)()%3B%7D)()%3B" style="background:rgb(188, 186, 186);border-radius: 3px;padding: 5px 10px;">Thread</a>
+    </p>
     <div class="controls">
       <form id="urlForm">
         <input type="text" id="postUrl" placeholder="Bluesky post URL" required />
@@ -441,7 +447,10 @@
     </div>
   </header>
   <div id="threadContainer"></div>
-
+  <div id="footer"
+    style="margin-top: 2em; font-size: 0.8rem; color: #666; max-width: 800px;">
+    View on <a href="https://github.com/colarusso/bluesky-thread" target="_blank">GitHub</a>
+  </div>
   <script>
     (async () => {
       const form = document.getElementById('urlForm');
@@ -1557,8 +1566,8 @@
           if (url.hostname !== 'bsky.app') throw new Error('URL must be from bsky.app');
           const parts = url.pathname.split('/').filter(Boolean);
           if (parts[0] !== 'profile' || parts[2] !== 'post') throw new Error('Use https://bsky.app/profile/{handle}/post/{postId}');
-          const rawHandle = parts[1];
-          const actor = rawHandle.includes('.') ? rawHandle : `${rawHandle}.bsky.social`;
+          const rawHandle = decodeURIComponent(parts[1]);
+          const actor = rawHandle.startsWith('did:') || rawHandle.includes('.') ? rawHandle : `${rawHandle}.bsky.social`;
           const postId = parts[3];
 
           const profileRes = await fetch(
