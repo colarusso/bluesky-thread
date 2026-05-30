@@ -1,10 +1,10 @@
 # A Tool for Unrolling and Inspecting Bluesky Threads
 
-This tool adds thread unrolling to Simon Willison's [Bluesky Thread](https://github.com/simonw/tools/blob/main/bluesky-thread.html). Here's the [context behind Simon's html tools](https://simonwillison.net/2025/Dec/10/html-tools/). It also added collapse and expand behavior to the thread view. 
+This tool adds thread unrolling to Simon Willison's [Bluesky Thread](https://github.com/simonw/tools/blob/main/bluesky-thread.html). Here's the [context behind Simon's html tools](https://simonwillison.net/2025/Dec/10/html-tools/). It also added collapse and expand behavior to the thread view and support for very very long threads. 
 
 You can turn the code below into a bookmarklet at https://caiorss.github.io/bookmarklet-maker/ 
 
-This lets you just click the bookmarklet when viewing a thread to see it unrolled or inspect the replies. 
+Doig so lets you just click the bookmarklet when viewing a thread to see it unrolled or inspect the replies. 
 
 ```
 javascript: (function() {
@@ -14,4 +14,4 @@ javascript: (function() {
 })();
 ```
 
-Alternativly, a bookmarklet can be found on the [GitHub Page](https://colarusso.github.io/bluesky-thread/).
+Alternativly, a bookmarklet can be found on the [live GitHub Page](https://colarusso.github.io/bluesky-thread/).
