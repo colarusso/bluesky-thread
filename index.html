@@ -559,9 +559,9 @@
         return items;
       }
 
-      async function fetchThreadByUri(uri, depth = 1000) {
+      async function fetchThreadByUri(uri, depth = 1000, parentHeight = 0) {
         const res = await fetch(
-          `https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri=${encodeURIComponent(uri)}&depth=${depth}&parentHeight=0`
+          `https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri=${encodeURIComponent(uri)}&depth=${depth}&parentHeight=${parentHeight}`
         );
         if (!res.ok) throw new Error('Thread fetch failed ' + res.status);
         const json = await res.json();
@@ -591,6 +591,63 @@
         return byUri;
       }
 
+      function cloneThreadItemWithoutParent(item) {
+        const clone = {
+          ...item,
+          replies: Array.isArray(item && item.replies) ? item.replies : []
+        };
+        delete clone.parent;
+        return clone;
+      }
+
+      function getParentChain(item) {
+        const chain = [];
+        const seen = new Set();
+        let current = item;
+        while (current && current.post && current.post.uri && !seen.has(current.post.uri)) {
+          seen.add(current.post.uri);
+          chain.push(current);
+          current = current.parent;
+        }
+        return chain.reverse();
+      }
+
+      function mergeParentChainIntoThread(thread, centeredThreadItem) {
+        if (!thread || !thread.post || !centeredThreadItem || !centeredThreadItem.post) return 0;
+        const rootUri = thread.post.uri;
+        const chain = getParentChain(centeredThreadItem);
+        const rootIndex = chain.findIndex(item => item && item.post && item.post.uri === rootUri);
+        if (rootIndex < 0) return 0;
+
+        const relevantChain = chain.slice(rootIndex);
+        if (relevantChain.length < 2) return 0;
+
+        const byUri = indexThreadItemsByUri(thread);
+        let parent = byUri.get(rootUri);
+        let added = 0;
+
+        for (let i = 1; i < relevantChain.length; i += 1) {
+          const sourceItem = relevantChain[i];
+          const uri = sourceItem && sourceItem.post && sourceItem.post.uri;
+          if (!uri || !parent) break;
+
+          let existing = byUri.get(uri);
+          if (!existing) {
+            existing = cloneThreadItemWithoutParent(sourceItem);
+            if (!Array.isArray(parent.replies)) parent.replies = [];
+            parent.replies.push(existing);
+            byUri.set(uri, existing);
+            added += 1;
+          } else {
+            added += mergeThreadItems(existing, sourceItem);
+          }
+          parent = existing;
+        }
+
+        sortRepliesByDate(thread);
+        return added;
+      }
+
       function mergeRootAuthorFeedPosts(thread, postViews) {
         if (!thread || !thread.post || !Array.isArray(postViews) || !postViews.length) return 0;
         const rootUri = thread.post.uri;
@@ -609,14 +666,25 @@
 
         candidates.forEach(post => {
           if (post.uri === rootUri || byUri.has(post.uri)) return;
+          const parentUri = post.record.reply && post.record.reply.parent && post.record.reply.parent.uri;
+          const parent = byUri.get(parentUri);
+
+          // Do not fall back to attaching missing-parent posts to the root.
+          // The author feed includes the root author's replies anywhere under
+          // this root, including replies to other users. If that other user's
+          // parent post is not loaded, attaching the root author's reply to the
+          // thread root makes it look like part of the author's main unroll.
+          // Only merge posts whose actual parent is already present. Direct
+          // root replies and self-reply continuations will still be merged
+          // once their parent is available.
+          if (!parent) return;
+
           const item = {
             post,
             replies: [],
             threadContext: {},
             $type: 'app.bsky.feed.defs#threadViewPost'
           };
-          const parentUri = post.record.reply && post.record.reply.parent && post.record.reply.parent.uri;
-          const parent = byUri.get(parentUri) || thread;
           if (!Array.isArray(parent.replies)) parent.replies = [];
           if (!parent.replies.some(reply => reply && reply.post && reply.post.uri === post.uri)) {
             parent.replies.push(item);
@@ -636,8 +704,8 @@
         const MAX_AUTHOR_FEED_PAGES = 75;
         let cursor = null;
         let pages = 0;
-        let totalAdded = 0;
         let foundRootInFeed = false;
+        const collectedPostViews = [];
 
         while (pages < MAX_AUTHOR_FEED_PAGES) {
           pages += 1;
@@ -653,8 +721,8 @@
 
           const feed = Array.isArray(json.feed) ? json.feed : [];
           const postViews = feed.map(item => item && item.post).filter(Boolean);
+          collectedPostViews.push(...postViews);
           if (postViews.some(post => post.uri === rootUri)) foundRootInFeed = true;
-          totalAdded += mergeRootAuthorFeedPosts(thread, postViews);
 
           const oldest = postViews.reduce((oldestSeen, post) => {
             const created = new Date(post.record && post.record.createdAt ? post.record.createdAt : 0);
@@ -667,6 +735,41 @@
           // root post's creation time, we have seen the window where same-author
           // replies belonging to this thread can appear.
           if (foundRootInFeed && oldest && oldest < rootCreatedAt) break;
+        }
+
+        // Merge only after collecting the relevant feed window. This lets later
+        // posts on newer feed pages find their real parents after older pages
+        // have been collected, without using an unsafe root fallback.
+        let totalAdded = mergeRootAuthorFeedPosts(thread, collectedPostViews);
+
+        // If the root author replied to someone else under this root, the author
+        // feed contains that reply but not necessarily the other user's parent.
+        // Fetch those centered posts with their parent chain and merge the chain
+        // into the full thread view. The unrolled view remains strict because it
+        // follows only direct same-author continuations.
+        const missingParentCandidates = collectedPostViews
+          .filter(post => {
+            if (!post || !post.uri || !post.record || !post.author) return false;
+            if (post.author.did !== (thread.post.author && thread.post.author.did)) return false;
+            if (!post.record.reply || !post.record.reply.root || post.record.reply.root.uri !== rootUri) return false;
+            const parentUri = post.record.reply.parent && post.record.reply.parent.uri;
+            if (!parentUri || parentUri === rootUri) return false;
+            return !indexThreadItemsByUri(thread).has(parentUri);
+          })
+          .sort((a, b) => new Date(a.record.createdAt) - new Date(b.record.createdAt));
+
+        let parentChainRequests = 0;
+        for (const post of missingParentCandidates) {
+          if (parentChainRequests >= MAX_EXTRA_THREAD_FETCHES) break;
+          parentChainRequests += 1;
+          setLoadingMessage(`Recovering side replies from thread context… ${parentChainRequests} checked`);
+          try {
+            const centered = await fetchThreadByUri(post.uri, 1000, 1000);
+            totalAdded += mergeParentChainIntoThread(thread, centered);
+            totalAdded += mergeRootAuthorFeedPosts(thread, collectedPostViews);
+          } catch (err) {
+            console.warn('Could not recover parent chain for root-author side reply', post.uri, err);
+          }
         }
 
         return { pages, added: totalAdded };
@@ -1052,7 +1155,16 @@
           .join('\n');
       }
 
+      function isReplyToUri(post, parentUri) {
+        return !!(post && post.record && post.record.reply &&
+          post.record.reply.parent && post.record.reply.parent.uri === parentUri);
+      }
+
       // Collect root-author posts that make up the unrolled thread, excluding comments/replies from others.
+      // A post is treated as a continuation only when it is a direct reply to
+      // the previous root-author thread post. Same-author replies to other
+      // people's comments share the same root URI, but they should stay out of
+      // the text-only unroll.
       function getUnrolledPosts(thread) {
         if (!thread || !thread.post) return [];
         const rootAuthorDid = thread.post.author.did;
@@ -1063,7 +1175,9 @@
           if (!item.replies || !item.replies.length) return;
 
           const continuations = item.replies
-            .filter(reply => reply.post && reply.post.author.did === rootAuthorDid)
+            .filter(reply => reply.post &&
+              reply.post.author.did === rootAuthorDid &&
+              isReplyToUri(reply.post, item.post.uri))
             .sort((a, b) => new Date(a.post.record.createdAt) - new Date(b.post.record.createdAt));
 
           continuations.forEach(reply => {
