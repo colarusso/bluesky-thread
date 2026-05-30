@@ -13,3 +13,5 @@ javascript: (function() {
         window.open(openUrl, '_blank');
 })();
 ```
+
+Alternativly, a bookmarklet can be found on the [GitHub Page](https://colarusso.github.io/bluesky-thread/).
