@@ -485,6 +485,231 @@
         return posts;
       }
 
+
+      // Bluesky sometimes truncates busy branches in getPostThread responses
+      // behind a "Read n more" affordance in the app. The public API does not
+      // provide a cursor for those branches, but fetching the incomplete reply
+      // as its own thread often returns more of its children. We do that here
+      // and merge newly discovered replies back into the main tree.
+      const MAX_EXTRA_THREAD_FETCHES = 250;
+
+      function countLoadedReplies(item) {
+        return item && Array.isArray(item.replies) ? item.replies.length : 0;
+      }
+
+      function getPostReplyCount(item) {
+        const count = item && item.post && item.post.replyCount;
+        return Number.isFinite(count) ? count : 0;
+      }
+
+      function sortRepliesByDate(item) {
+        if (!item || !Array.isArray(item.replies)) return;
+        item.replies.sort((a, b) => {
+          const aTime = new Date(a.post && a.post.record && a.post.record.createdAt ? a.post.record.createdAt : 0);
+          const bTime = new Date(b.post && b.post.record && b.post.record.createdAt ? b.post.record.createdAt : 0);
+          return aTime - bTime;
+        });
+        item.replies.forEach(sortRepliesByDate);
+      }
+
+      function mergeThreadItems(target, source) {
+        if (!target || !source) return 0;
+        if (!Array.isArray(target.replies)) target.replies = [];
+        const sourceReplies = Array.isArray(source.replies) ? source.replies : [];
+        const byUri = new Map(target.replies
+          .filter(reply => reply && reply.post && reply.post.uri)
+          .map(reply => [reply.post.uri, reply]));
+        let added = 0;
+
+        sourceReplies.forEach(sourceReply => {
+          const uri = sourceReply && sourceReply.post && sourceReply.post.uri;
+          if (!uri) return;
+          const existing = byUri.get(uri);
+          if (existing) {
+            added += mergeThreadItems(existing, sourceReply);
+          } else {
+            target.replies.push(sourceReply);
+            byUri.set(uri, sourceReply);
+            added += 1;
+          }
+        });
+
+        sortRepliesByDate(target);
+        return added;
+      }
+
+      function getThreadItemsBreadthFirst(root) {
+        const items = [];
+        const queue = root ? [root] : [];
+        const seen = new Set();
+        while (queue.length) {
+          const item = queue.shift();
+          const uri = item && item.post && item.post.uri;
+          if (!uri || seen.has(uri)) continue;
+          seen.add(uri);
+          items.push(item);
+          if (Array.isArray(item.replies)) queue.push(...item.replies);
+        }
+        return items;
+      }
+
+      async function fetchThreadByUri(uri, depth = 1000) {
+        const res = await fetch(
+          `https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri=${encodeURIComponent(uri)}&depth=${depth}&parentHeight=0`
+        );
+        if (!res.ok) throw new Error('Thread fetch failed ' + res.status);
+        const json = await res.json();
+        if (!json.thread || json.thread.$type === 'app.bsky.feed.defs#notFoundPost') return null;
+        return json.thread;
+      }
+
+      async function fetchAuthorFeedPage(actor, cursor = null, filter = 'posts_with_replies') {
+        const params = new URLSearchParams({ actor, limit: '100' });
+        if (filter) params.set('filter', filter);
+        if (cursor) params.set('cursor', cursor);
+        const res = await fetch(`https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed?${params.toString()}`);
+        if (!res.ok) throw new Error('Author feed fetch failed ' + res.status);
+        return res.json();
+      }
+
+      function indexThreadItemsByUri(root) {
+        const byUri = new Map();
+        const queue = root ? [root] : [];
+        while (queue.length) {
+          const item = queue.shift();
+          const uri = item && item.post && item.post.uri;
+          if (!uri || byUri.has(uri)) continue;
+          byUri.set(uri, item);
+          if (Array.isArray(item.replies)) queue.push(...item.replies);
+        }
+        return byUri;
+      }
+
+      function mergeRootAuthorFeedPosts(thread, postViews) {
+        if (!thread || !thread.post || !Array.isArray(postViews) || !postViews.length) return 0;
+        const rootUri = thread.post.uri;
+        const rootAuthorDid = thread.post.author && thread.post.author.did;
+        const byUri = indexThreadItemsByUri(thread);
+        let added = 0;
+
+        const candidates = postViews
+          .filter(post => {
+            if (!post || !post.uri || !post.record || !post.author) return false;
+            if (post.author.did !== rootAuthorDid) return false;
+            if (post.uri === rootUri) return true;
+            return post.record.reply && post.record.reply.root && post.record.reply.root.uri === rootUri;
+          })
+          .sort((a, b) => new Date(a.record.createdAt) - new Date(b.record.createdAt));
+
+        candidates.forEach(post => {
+          if (post.uri === rootUri || byUri.has(post.uri)) return;
+          const item = {
+            post,
+            replies: [],
+            threadContext: {},
+            $type: 'app.bsky.feed.defs#threadViewPost'
+          };
+          const parentUri = post.record.reply && post.record.reply.parent && post.record.reply.parent.uri;
+          const parent = byUri.get(parentUri) || thread;
+          if (!Array.isArray(parent.replies)) parent.replies = [];
+          if (!parent.replies.some(reply => reply && reply.post && reply.post.uri === post.uri)) {
+            parent.replies.push(item);
+            byUri.set(post.uri, item);
+            added += 1;
+          }
+        });
+
+        sortRepliesByDate(thread);
+        return added;
+      }
+
+      async function expandRootAuthorThreadFromAuthorFeed(thread, actor) {
+        if (!thread || !thread.post) return { pages: 0, added: 0 };
+        const rootCreatedAt = new Date(thread.post.record && thread.post.record.createdAt ? thread.post.record.createdAt : 0);
+        const rootUri = thread.post.uri;
+        const MAX_AUTHOR_FEED_PAGES = 75;
+        let cursor = null;
+        let pages = 0;
+        let totalAdded = 0;
+        let foundRootInFeed = false;
+
+        while (pages < MAX_AUTHOR_FEED_PAGES) {
+          pages += 1;
+          setLoadingMessage(`Checking author feed for long-thread continuations… page ${pages}`);
+          let json;
+          try {
+            json = await fetchAuthorFeedPage(actor, cursor, 'posts_with_replies');
+          } catch (err) {
+            // Older AppViews or mirrors may reject the filter parameter. Retry that
+            // one page without it rather than failing the whole thread load.
+            json = await fetchAuthorFeedPage(actor, cursor, null);
+          }
+
+          const feed = Array.isArray(json.feed) ? json.feed : [];
+          const postViews = feed.map(item => item && item.post).filter(Boolean);
+          if (postViews.some(post => post.uri === rootUri)) foundRootInFeed = true;
+          totalAdded += mergeRootAuthorFeedPosts(thread, postViews);
+
+          const oldest = postViews.reduce((oldestSeen, post) => {
+            const created = new Date(post.record && post.record.createdAt ? post.record.createdAt : 0);
+            return !oldestSeen || created < oldestSeen ? created : oldestSeen;
+          }, null);
+
+          cursor = json.cursor;
+          if (!cursor || feed.length === 0) break;
+          // The author feed is reverse chronological. Once we have paged past the
+          // root post's creation time, we have seen the window where same-author
+          // replies belonging to this thread can appear.
+          if (foundRootInFeed && oldest && oldest < rootCreatedAt) break;
+        }
+
+        return { pages, added: totalAdded };
+      }
+
+      function setLoadingMessage(message) {
+        container.textContent = message;
+      }
+
+      async function expandTruncatedReplyBranches(thread) {
+        if (!thread) return { requests: 0, added: 0 };
+        const attempted = new Set();
+        let requests = 0;
+        let totalAdded = 0;
+        let madeProgress = true;
+
+        while (madeProgress && requests < MAX_EXTRA_THREAD_FETCHES) {
+          madeProgress = false;
+          const candidates = getThreadItemsBreadthFirst(thread)
+            .filter(item => {
+              const uri = item && item.post && item.post.uri;
+              return uri && !attempted.has(uri) && getPostReplyCount(item) > countLoadedReplies(item);
+            });
+
+          if (!candidates.length) break;
+
+          for (const item of candidates) {
+            if (requests >= MAX_EXTRA_THREAD_FETCHES) break;
+            const uri = item.post.uri;
+            attempted.add(uri);
+            requests += 1;
+            setLoadingMessage(`Fetching hidden reply branches… ${requests} branch${requests === 1 ? '' : 'es'} checked`);
+
+            try {
+              const expanded = await fetchThreadByUri(uri, 1000);
+              const added = mergeThreadItems(item, expanded);
+              if (added > 0) {
+                totalAdded += added;
+                madeProgress = true;
+              }
+            } catch (err) {
+              console.warn('Could not expand hidden reply branch', uri, err);
+            }
+          }
+        }
+
+        return { requests, added: totalAdded };
+      }
+
       // Render text with facets (links, mentions, etc.)
       function renderTextWithFacets(text, facets) {
         if (!facets || !facets.length) {
@@ -1345,15 +1570,16 @@
           if (!did) throw new Error('Could not parse DID');
 
           const atUri = `at://${did}/app.bsky.feed.post/${postId}`;
-          const threadRes = await fetch(
-            `https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri=${encodeURIComponent(atUri)}&depth=1000&parentHeight=0`
-          );
-          if (!threadRes.ok) throw new Error('Thread fetch failed ' + threadRes.status);
-          const threadJson = await threadRes.json();
-          if (threadJson.thread.$type === 'app.bsky.feed.defs#notFoundPost') throw new Error('Post not found');
+          setLoadingMessage('Fetching thread…');
+          const thread = await fetchThreadByUri(atUri, 1000);
+          if (!thread) throw new Error('Post not found');
 
-          lastThread = threadJson.thread;
-          allPosts = flattenThread(threadJson.thread);
+          await expandTruncatedReplyBranches(thread);
+          await expandRootAuthorThreadFromAuthorFeed(thread, actor);
+          await expandTruncatedReplyBranches(thread);
+
+          lastThread = thread;
+          allPosts = flattenThread(thread);
           renderCurrentView();
           copyContainer.style.display = 'block';
           viewTabs.style.display = 'block';
