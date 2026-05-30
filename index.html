@@ -218,6 +218,17 @@
       font-size: 1.05rem;
       line-height: 1.6;
     }
+    .unrolled-post {
+      padding: 1em 0;
+      border-top: 1px solid #eee;
+    }
+    .unrolled-post:first-of-type {
+      border-top: none;
+      padding-top: 0;
+    }
+    .unrolled-post .text {
+      margin-bottom: 0.5em;
+    }
     .unrolled-empty {
       color: #666;
       font-style: italic;
@@ -435,7 +446,8 @@
       </form>
     </div>
     <div class="tabs" id="viewTabs">
-      <button class="tab active" data-view="unrolled">Unrolled (text only)</button>
+      <button class="tab active" data-view="unrolledText">Unrolled (text only)</button>
+      <button class="tab" data-view="unrolled">Unrolled (rich media)</button>
       <button class="tab" data-view="thread">Thread View</button>
     </div>
   </header>
@@ -459,7 +471,7 @@
       const postUrl = document.getElementById('postUrl');
       let lastThread = null;
       let allPosts = []; // Flat array of all posts with metadata
-      let currentView = 'unrolled';
+      let currentView = 'unrolledText';
       let collapsedPostUris = new Set();
 
       postUrl.addEventListener('keydown', (e) => {
@@ -1372,7 +1384,7 @@ ${description}`;
 
       // Generate thread text in a readable format, matching the current view where appropriate
       function generateThreadText(thread) {
-        if (currentView === 'unrolled') {
+        if (currentView === 'unrolledText' || currentView === 'unrolled') {
           return generateUnrolledText(thread);
         }
 
@@ -1506,7 +1518,7 @@ ${description}`;
       }
 
       function applyCollapsedThreads() {
-        if (currentView === 'unrolled') return;
+        if (currentView === 'unrolledText' || currentView === 'unrolled') return;
 
         container.querySelectorAll('.post[data-uri]').forEach(postEl => {
           const uri = postEl.dataset.uri;
@@ -1535,7 +1547,7 @@ ${description}`;
       function setupThreadCollapseControls() {
         const existing = container.querySelector('.thread-collapse-controls');
         if (existing) existing.remove();
-        if (currentView === 'unrolled' || !lastThread) return;
+        if (currentView === 'unrolledText' || currentView === 'unrolled' || !lastThread) return;
 
         const collapsiblePosts = container.querySelectorAll('.post[data-has-replies="1"]');
         if (collapsiblePosts.length === 0) return;
@@ -1665,6 +1677,59 @@ ${description}`;
         container.appendChild(card);
       }
 
+      // Display the root author's thread with interactive rich embeds, without comments.
+      function displayUnrolledRichView() {
+        container.innerHTML = '';
+        if (!lastThread) return;
+
+        const unrolledPosts = getUnrolledPosts(lastThread);
+        const card = document.createElement('article');
+        card.className = 'unrolled-card';
+
+        const meta = document.createElement('div');
+        meta.className = 'unrolled-meta';
+        const author = lastThread.post.author.displayName || lastThread.post.author.handle;
+        const count = unrolledPosts.length;
+        meta.textContent = `${author} · ${count} post${count === 1 ? '' : 's'} unrolled`;
+        card.appendChild(meta);
+
+        if (!unrolledPosts.length) {
+          const empty = document.createElement('div');
+          empty.className = 'unrolled-empty';
+          empty.textContent = 'No posts found in this thread.';
+          card.appendChild(empty);
+        } else {
+          unrolledPosts.forEach(item => {
+            const postEl = document.createElement('section');
+            postEl.className = 'unrolled-post';
+
+            const text = document.createElement('div');
+            text.className = 'text';
+            const postBody = item.post.record.text || '';
+            if (postBody.trim()) {
+              text.appendChild(renderTextWithFacets(postBody, item.post.record.facets));
+              postEl.appendChild(text);
+            }
+
+            if (item.post.embed) {
+              const embedEl = renderEmbed(item.post.embed);
+              if (embedEl) postEl.appendChild(embedEl);
+            }
+
+            if (!postEl.childNodes.length) {
+              const emptyPost = document.createElement('div');
+              emptyPost.className = 'unrolled-empty';
+              emptyPost.textContent = 'This post has no text or displayable embeds.';
+              postEl.appendChild(emptyPost);
+            }
+
+            card.appendChild(postEl);
+          });
+        }
+
+        container.appendChild(card);
+      }
+
       // Display thread view
       function displayThreadView() {
         container.innerHTML = '';
@@ -1675,8 +1740,10 @@ ${description}`;
 
       // Render current view
       function renderCurrentView() {
-        if (currentView === 'unrolled') {
+        if (currentView === 'unrolledText') {
           displayUnrolledView();
+        } else if (currentView === 'unrolled') {
+          displayUnrolledRichView();
         } else {
           displayThreadView();
         }
@@ -1789,8 +1856,10 @@ ${description}`;
       const urlParam = params.get('url');
       const viewParam = params.get('view');
       // Initialize view from URL parameter if valid
-      if (viewParam === 'unrolled' || viewParam === 'thread') {
+      if (viewParam === 'unrolledText' || viewParam === 'unrolled' || viewParam === 'thread') {
         currentView = viewParam;
+      } else if (viewParam === 'text' || viewParam === 'unrolled-text') {
+        currentView = 'unrolledText';
       } else if (viewParam) {
         currentView = 'thread';
       }
