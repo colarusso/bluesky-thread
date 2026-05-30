@@ -45,7 +45,7 @@
     }
     .copy-container {
       display: none;
-      margin-bottom: 1em;
+      margin: 1em 0;
     }
     #copyBtn,
     #copyJsonBtn {
@@ -434,16 +434,16 @@
         <button type="submit">Fetch Thread</button>
       </form>
     </div>
-    <div class="copy-container">
-      <button id="copyBtn">Copy</button>
-      <button id="copyJsonBtn">Copy JSON</button>
-    </div>
     <div class="tabs" id="viewTabs">
       <button class="tab active" data-view="unrolled">Unrolled (text only)</button>
       <button class="tab" data-view="thread">Thread View</button>
     </div>
   </header>
   <div id="threadContainer"></div>
+  <div class="copy-container">
+    <button id="copyBtn">Copy</button>
+    <button id="copyJsonBtn">Copy JSON</button>
+  </div>
   <div id="footer"
     style="margin-top: 2em; font-size: 0.8rem; color: #666; max-width: 800px;">
     View on <a href="https://github.com/colarusso/bluesky-thread" target="_blank">GitHub</a>
