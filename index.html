@@ -1206,11 +1206,9 @@
         const authorName = author.displayName || author.handle || 'unknown author';
         const handle = author.handle ? ` (@${author.handle})` : '';
         const quotedText = quoted.value && quoted.value.text ? quoted.value.text.trim() : '';
-        const quotedLines = quotedText
-          ? quotedText.split('\n').map(line => `> ${line}`).join('\n')
-          : '> [Quoted post has no text]';
+        const quotedLines = quotedText || '[Quoted post has no text]';
         const quotedAltText = formatImageAltTexts(extractImageAltTexts(quoted));
-        return [`[Quoted post by ${authorName}${handle}]`, quotedLines, quotedAltText]
+        return [`[Quoted post by ${authorName}${handle}]`, quotedLines, quotedAltText, '[End quote post]']
           .filter(Boolean)
           .join('\n');
       }
