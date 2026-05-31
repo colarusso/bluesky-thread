@@ -447,7 +447,7 @@
     </div>
     <div class="tabs" id="viewTabs">
       <button class="tab active" data-view="unrolledText">Unrolled (text version)</button>
-      <button class="tab" data-view="unrolled">Unrolled (rich media)</button>
+      <button class="tab" data-view="unrolled">Unrolled (rich text)</button>
       <button class="tab" data-view="thread">Thread View</button>
     </div>
   </header>
@@ -1155,11 +1155,9 @@
 
         function imageKey(image, fallbackIndex) {
           if (!image || typeof image !== 'object') return `image:${fallbackIndex}`;
-          const source = image.fullsize || image.thumb ||
-            (image.image && image.image.ref && image.image.ref.$link) ||
-            (image.image && image.image.cid) ||
-            (image.blob && image.blob.ref && image.blob.ref.$link) ||
-            '';
+          const blobRef = getBlobRefFromImageObject(image);
+          if (blobRef) return `image-blob:${blobRef}`;
+          const source = image.fullsize || image.thumb || '';
           return source ? `image:${source}` : `image:${fallbackIndex}`;
         }
 
@@ -1228,10 +1226,15 @@
 
         function collect(node) {
           if (!node || typeof node !== 'object') return;
-          // Thread items wrap the post object; post objects wrap the raw record.
+
+          // Thread items wrap the post object; post objects may contain both the
+          // hydrated AppView embed at post.embed and the raw repository record at
+          // post.record.embed. Include both, then let per-media de-duplication collapse
+          // the same blob when it is present in both shapes.
           if (node.post) collect(node.post);
           if (node.embed) remember(node.embed);
           if (node.record && node.record.embed) remember(node.record.embed);
+
           // Quoted view records store the original post payload at value.embed.
           if (node.value && node.value.embed) remember(node.value.embed);
           // Hydrated AppView records often expose direct embeds in an embeds array.
@@ -1242,6 +1245,24 @@
         return embeds;
       }
 
+      function getBlobRefFromImageUrl(url) {
+        if (typeof url !== 'string') return '';
+        // Bluesky CDN image URLs end with the content-addressed blob ref:
+        // .../feed_thumbnail/plain/{did}/{bafkrei...}
+        const match = url.match(/\/((?:baf|bag)[a-z0-9]+)(?:[?#].*)?$/i);
+        return match ? match[1] : '';
+      }
+
+      function getBlobRefFromImageObject(image) {
+        if (!image || typeof image !== 'object') return '';
+        return (image.image && image.image.ref && image.image.ref.$link) ||
+          (image.image && image.image.cid) ||
+          (image.blob && image.blob.ref && image.blob.ref.$link) ||
+          getBlobRefFromImageUrl(image.fullsize) ||
+          getBlobRefFromImageUrl(image.thumb) ||
+          '';
+      }
+
       function extractImageAltTextsFromDirectEmbeds(value) {
         const altTexts = [];
         const seenImages = new WeakSet();
@@ -1249,10 +1270,9 @@
 
         function imageKey(image, fallbackIndex) {
           if (!image || typeof image !== 'object') return `image:${fallbackIndex}`;
-          const source = image.fullsize || image.thumb ||
-            (image.image && image.image.ref && image.image.ref.$link) ||
-            (image.image && image.image.cid) ||
-            '';
+          const blobRef = getBlobRefFromImageObject(image);
+          if (blobRef) return `image-blob:${blobRef}`;
+          const source = image.fullsize || image.thumb || '';
           return source ? `image:${source}` : `image:${fallbackIndex}`;
         }
 
