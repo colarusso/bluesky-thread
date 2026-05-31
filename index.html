@@ -446,8 +446,8 @@
       </form>
     </div>
     <div class="tabs" id="viewTabs">
-      <button class="tab" data-view="unrolledText">Unrolled (text version)</button>
-      <button class="tab active" data-view="unrolled">Unrolled (rich media)</button>
+      <button class="tab active" data-view="unrolledText">Unrolled (text version)</button>
+      <button class="tab" data-view="unrolled">Unrolled (rich media)</button>
       <button class="tab" data-view="thread">Thread View</button>
     </div>
   </header>
@@ -471,36 +471,8 @@
       const postUrl = document.getElementById('postUrl');
       let lastThread = null;
       let allPosts = []; // Flat array of all posts with metadata
-      const VIEW_STORAGE_KEY = 'blueskyThreadDefaultView';
-      const DEFAULT_VIEW = 'unrolled';
-      const VALID_VIEWS = new Set(['unrolledText', 'unrolled', 'thread']);
-      let currentView = DEFAULT_VIEW;
+      let currentView = 'unrolledText';
       let collapsedPostUris = new Set();
-
-      function normalizeView(value) {
-        if (value === 'text' || value === 'unrolled-text' || value === 'unrolledText') return 'unrolledText';
-        if (value === 'rich' || value === 'media' || value === 'unrolled-rich' || value === 'unrolled') return 'unrolled';
-        if (value === 'thread') return 'thread';
-        return null;
-      }
-
-      function getStoredDefaultView() {
-        try {
-          const stored = normalizeView(localStorage.getItem(VIEW_STORAGE_KEY));
-          return stored && VALID_VIEWS.has(stored) ? stored : null;
-        } catch (err) {
-          return null;
-        }
-      }
-
-      function rememberDefaultView(view) {
-        if (!VALID_VIEWS.has(view)) return;
-        try {
-          localStorage.setItem(VIEW_STORAGE_KEY, view);
-        } catch (err) {
-          // localStorage may be unavailable in private browsing or local file contexts.
-        }
-      }
 
       postUrl.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); form.requestSubmit(); }
@@ -1008,17 +980,45 @@
         return container;
       }
 
-      // Render external link preview
+      function isGifLikeExternal(external) {
+        if (!external || typeof external.uri !== 'string') return false;
+        try {
+          const url = new URL(external.uri);
+          return /\.gif$/i.test(url.pathname) || /(^|\.)giphy\.com$/i.test(url.hostname) || /(^|\.)tenor\.com$/i.test(url.hostname) || /(^|\.)klipy\.com$/i.test(url.hostname);
+        } catch (err) {
+          return /\.gif(?:[?#]|$)/i.test(external.uri);
+        }
+      }
+
+      function getExternalDescriptionText(external) {
+        const description = external && typeof external.description === 'string' ? external.description.trim() : '';
+        return description.replace(/^ALT:\s*/i, '').trim();
+      }
+
+      // Render external link preview. Bluesky GIF embeds are hydrated as external
+      // cards whose URI points at the playable .gif while thumb is only a static
+      // JPEG preview, so prefer the URI for GIF-like cards.
       function renderExternalLink(external) {
-        if (!external) return null;
+        if (!external || !external.uri) return null;
         const link = document.createElement('a');
         link.className = 'external-link';
+        if (isGifLikeExternal(external)) link.classList.add('gif-card');
         link.href = external.uri;
         link.target = '_blank';
-        if (external.thumb) {
+        link.rel = 'noopener noreferrer';
+
+        const mediaSrc = isGifLikeExternal(external) ? external.uri : external.thumb;
+        if (mediaSrc) {
           const thumb = document.createElement('img');
           thumb.className = 'el-thumb';
-          thumb.src = external.thumb;
+          thumb.src = mediaSrc;
+          thumb.alt = getExternalDescriptionText(external) || external.title || '';
+          thumb.loading = 'lazy';
+          if (isGifLikeExternal(external) && external.thumb) {
+            thumb.addEventListener('error', () => {
+              thumb.src = external.thumb;
+            }, { once: true });
+          }
           link.appendChild(thumb);
         }
         const content = document.createElement('div');
@@ -1037,7 +1037,11 @@
         }
         const url = document.createElement('div');
         url.className = 'el-url';
-        url.textContent = new URL(external.uri).hostname;
+        try {
+          url.textContent = new URL(external.uri).hostname;
+        } catch (err) {
+          url.textContent = external.uri;
+        }
         content.appendChild(url);
         link.appendChild(content);
         return link;
@@ -1108,7 +1112,7 @@
         if (!embed) return null;
         const type = embed.$type;
 
-        if (type === 'app.bsky.embed.images#view') {
+        if (type === 'app.bsky.embed.images#view' || type === 'app.bsky.embed.images') {
           return renderImages(embed.images);
         }
 
@@ -1116,7 +1120,7 @@
           return renderVideo(embed);
         }
 
-        if (type === 'app.bsky.embed.external#view') {
+        if (type === 'app.bsky.embed.external#view' || type === 'app.bsky.embed.external') {
           return renderExternalLink(embed.external);
         }
 
@@ -1124,24 +1128,20 @@
           return renderQuoteTweet(embed.record);
         }
 
-        if (type === 'app.bsky.embed.recordWithMedia#view') {
+        if (type === 'app.bsky.embed.recordWithMedia#view' || type === 'app.bsky.embed.recordWithMedia') {
           const container = document.createElement('div');
-          // Render the media (images or video)
+
           if (embed.media) {
-            if (embed.media.$type === 'app.bsky.embed.images#view') {
-              const images = renderImages(embed.media.images);
-              if (images) container.appendChild(images);
-            } else if (embed.media.$type === 'app.bsky.embed.video#view') {
-              const video = renderVideo(embed.media);
-              if (video) container.appendChild(video);
-            }
+            const media = renderEmbed(embed.media);
+            if (media) container.appendChild(media);
           }
-          // Render the quoted record
+
           if (embed.record && embed.record.record) {
             const qt = renderQuoteTweet(embed.record.record);
             if (qt) container.appendChild(qt);
           }
-          return container;
+
+          return container.childNodes.length ? container : null;
         }
 
         return null;
@@ -1150,14 +1150,27 @@
       function extractImageAltTexts(value) {
         const altTexts = [];
         const seenObjects = new WeakSet();
-        const seenTexts = new Set();
+        const seenImages = new WeakSet();
+        const seenKeys = new Set();
 
-        function addAlt(alt) {
-          if (typeof alt !== 'string') return;
-          const cleaned = alt.trim();
-          if (!cleaned || seenTexts.has(cleaned)) return;
-          seenTexts.add(cleaned);
-          altTexts.push(cleaned);
+        function imageKey(image, fallbackIndex) {
+          if (!image || typeof image !== 'object') return `image:${fallbackIndex}`;
+          const source = image.fullsize || image.thumb ||
+            (image.image && image.image.ref && image.image.ref.$link) ||
+            (image.image && image.image.cid) ||
+            (image.blob && image.blob.ref && image.blob.ref.$link) ||
+            '';
+          return source ? `image:${source}` : `image:${fallbackIndex}`;
+        }
+
+        function addImageAlt(image, fallbackIndex) {
+          if (!image || typeof image !== 'object') return;
+          if (seenImages.has(image)) return;
+          seenImages.add(image);
+          const key = imageKey(image, fallbackIndex);
+          if (seenKeys.has(key)) return;
+          seenKeys.add(key);
+          altTexts.push(typeof image.alt === 'string' ? image.alt.trim() : '');
         }
 
         function visit(node) {
@@ -1171,14 +1184,22 @@
           }
 
           // Hydrated image embeds use app.bsky.embed.images#view; raw records use
-          // app.bsky.embed.images. Both expose images with alt text.
+          // app.bsky.embed.images. Both expose images; emit a tag even when alt is blank.
           if ((node.$type === 'app.bsky.embed.images#view' || node.$type === 'app.bsky.embed.images') && Array.isArray(node.images)) {
-            node.images.forEach(image => addAlt(image && image.alt));
+            node.images.forEach((image, index) => addImageAlt(image, index));
           }
 
-          // Some image objects may be reached without their parent embed wrapper.
-          if (Object.prototype.hasOwnProperty.call(node, 'alt') && (node.thumb || node.fullsize || node.image || node.aspectRatio)) {
-            addAlt(node.alt);
+          // Some hydrated image objects may be reached without their parent embed wrapper.
+          // Do not treat video embeds, GIF/external thumbnails, or generic aspectRatio-bearing
+          // media objects as normal images; those have their own text-only handling.
+          const isLooseImageObject = Object.prototype.hasOwnProperty.call(node, 'alt') &&
+            (node.fullsize || node.image) &&
+            node.$type !== 'app.bsky.embed.video#view' &&
+            node.$type !== 'app.bsky.embed.video' &&
+            node.$type !== 'app.bsky.embed.external#view' &&
+            node.$type !== 'app.bsky.embed.external';
+          if (isLooseImageObject) {
+            addImageAlt(node, altTexts.length);
           }
 
           Object.values(node).forEach(visit);
@@ -1195,6 +1216,50 @@
           .join('\n');
       }
 
+      function extractGifDescriptions(value) {
+        const descriptions = [];
+        const seenObjects = new WeakSet();
+        const seenUris = new Set();
+
+        function remember(external) {
+          if (!external || typeof external !== 'object' || !isGifLikeExternal(external)) return;
+          const uri = typeof external.uri === 'string' ? external.uri : '';
+          const key = uri || `${external.title || ''}\n${external.description || ''}`;
+          if (seenUris.has(key)) return;
+          seenUris.add(key);
+          const description = getExternalDescriptionText(external) ||
+            (typeof external.title === 'string' ? external.title.trim() : '');
+          descriptions.push(description);
+        }
+
+        function visit(node) {
+          if (!node || typeof node !== 'object') return;
+          if (seenObjects.has(node)) return;
+          seenObjects.add(node);
+
+          if (Array.isArray(node)) {
+            node.forEach(visit);
+            return;
+          }
+
+          if ((node.$type === 'app.bsky.embed.external#view' || node.$type === 'app.bsky.embed.external') && node.external) {
+            remember(node.external);
+          }
+
+          Object.values(node).forEach(visit);
+        }
+
+        visit(value);
+        return descriptions;
+      }
+
+      function formatGifDescriptions(descriptions) {
+        if (!descriptions || !descriptions.length) return '';
+        return descriptions
+          .map((description, index) => `[GIF description${descriptions.length > 1 ? ` ${index + 1}` : ''}: ${description}]`)
+          .join('\n');
+      }
+
 
       function extractExternalLinkCards(value) {
         const cards = [];
@@ -1203,6 +1268,9 @@
 
         function remember(external) {
           if (!external || typeof external !== 'object') return;
+          // GIF-like external embeds are described separately as [GIF description: ...]
+          // so they do not also appear as generic link cards in the text-only output.
+          if (isGifLikeExternal(external)) return;
           const title = typeof external.title === 'string' ? external.title.trim() : '';
           const description = typeof external.description === 'string' ? external.description.trim() : '';
           if (!title && !description) return;
@@ -1314,8 +1382,9 @@ ${description}`;
         const quotedText = quoted.value && quoted.value.text ? quoted.value.text.trim() : '';
         const quotedLines = quotedText || '[Quoted post has no text]';
         const quotedLinkCardText = externalLinkCardTextFromValue(quoted);
+        const quotedGifDescriptionText = formatGifDescriptions(extractGifDescriptions(quoted));
         const quotedAltText = formatImageAltTexts(extractImageAltTexts(quoted));
-        return [`[Quoted post by ${authorName}${handle}]`, quotedLines, quotedLinkCardText, quotedAltText, '[End quote post]']
+        return [`[Quoted post by ${authorName}${handle}]`, quotedLines, quotedLinkCardText, quotedGifDescriptionText, quotedAltText, '[End quote post]']
           .filter(Boolean)
           .join('\n');
       }
@@ -1393,6 +1462,9 @@ ${description}`;
 
         const imageAltText = formatImageAltTexts(extractImageAltTexts(item.post));
         if (imageAltText) parts.push(imageAltText);
+
+        const gifDescriptionText = formatGifDescriptions(extractGifDescriptions(item.post));
+        if (gifDescriptionText) parts.push(gifDescriptionText);
 
         const externalLinkCardText = externalLinkCardTextFromValue(item.post);
         if (externalLinkCardText) parts.push(externalLinkCardText);
@@ -1785,7 +1857,6 @@ ${description}`;
           const view = e.target.dataset.view;
           if (view !== currentView) {
             currentView = view;
-            rememberDefaultView(view);
             viewTabs.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             e.target.classList.add('active');
             // Update URL with current view
@@ -1884,10 +1955,14 @@ ${description}`;
       const params = new URLSearchParams(window.location.search);
       const urlParam = params.get('url');
       const viewParam = params.get('view');
-      // Initialize view: explicit URL view wins, then the user's saved default,
-      // then rich-media Unrolled on first use.
-      const normalizedViewParam = normalizeView(viewParam);
-      currentView = normalizedViewParam || getStoredDefaultView() || DEFAULT_VIEW;
+      // Initialize view from URL parameter if valid
+      if (viewParam === 'unrolledText' || viewParam === 'unrolled' || viewParam === 'thread') {
+        currentView = viewParam;
+      } else if (viewParam === 'text' || viewParam === 'unrolled-text') {
+        currentView = 'unrolledText';
+      } else if (viewParam) {
+        currentView = 'thread';
+      }
       viewTabs.querySelectorAll('.tab').forEach(t => {
         t.classList.toggle('active', t.dataset.view === currentView);
       });
