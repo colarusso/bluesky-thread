@@ -446,8 +446,8 @@
       </form>
     </div>
     <div class="tabs" id="viewTabs">
-      <button class="tab active" data-view="unrolledText">Text</button>
-      <button class="tab" data-view="unrolled">Unrolled</button>
+      <button class="tab" data-view="unrolledText">Text</button>
+      <button class="tab active" data-view="unrolled">Unrolled</button>
       <button class="tab" data-view="thread">Thread</button>
     </div>
   </header>
@@ -471,9 +471,40 @@
       const postUrl = document.getElementById('postUrl');
       let lastThread = null;
       let allPosts = []; // Flat array of all posts with metadata
-      let currentView = 'unrolledText';
+      let currentView = 'unrolled';
       let collapsedPostUris = new Set();
       let shouldAutoCollapseThreadView = true;
+
+      const VIEW_STORAGE_KEY = 'blueskyThreadView';
+      const VALID_VIEWS = new Set(['unrolledText', 'unrolled', 'thread']);
+
+      function normalizeView(view) {
+        if (VALID_VIEWS.has(view)) return view;
+        if (view === 'text' || view === 'unrolled-text') return 'unrolledText';
+        return null;
+      }
+
+      function getStoredView() {
+        try {
+          return normalizeView(localStorage.getItem(VIEW_STORAGE_KEY));
+        } catch (err) {
+          return null;
+        }
+      }
+
+      function setStoredView(view) {
+        try {
+          localStorage.setItem(VIEW_STORAGE_KEY, view);
+        } catch (err) {
+          // Ignore storage failures, e.g. private mode or blocked storage.
+        }
+      }
+
+      function setActiveTab(view) {
+        viewTabs.querySelectorAll('.tab').forEach(t => {
+          t.classList.toggle('active', t.dataset.view === view);
+        });
+      }
 
       postUrl.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); form.requestSubmit(); }
@@ -2042,8 +2073,8 @@ ${description}`;
           const view = e.target.dataset.view;
           if (view !== currentView) {
             currentView = view;
-            viewTabs.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            e.target.classList.add('active');
+            setStoredView(view);
+            setActiveTab(view);
             // Update URL with current view
             const newUrl = new URL(window.location);
             newUrl.searchParams.set('view', view);
@@ -2142,17 +2173,12 @@ ${description}`;
       const params = new URLSearchParams(window.location.search);
       const urlParam = params.get('url');
       const viewParam = params.get('view');
-      // Initialize view from URL parameter if valid
-      if (viewParam === 'unrolledText' || viewParam === 'unrolled' || viewParam === 'thread') {
-        currentView = viewParam;
-      } else if (viewParam === 'text' || viewParam === 'unrolled-text') {
-        currentView = 'unrolledText';
-      } else if (viewParam) {
-        currentView = 'thread';
-      }
-      viewTabs.querySelectorAll('.tab').forEach(t => {
-        t.classList.toggle('active', t.dataset.view === currentView);
-      });
+
+      const viewFromUrl = normalizeView(viewParam);
+      currentView = viewFromUrl || getStoredView() || 'unrolled';
+      if (viewFromUrl) setStoredView(currentView);
+      setActiveTab(currentView);
+
       if (urlParam) {
         postUrl.value = urlParam;
         form.requestSubmit();
