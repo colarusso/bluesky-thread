@@ -446,8 +446,8 @@
       </form>
     </div>
     <div class="tabs" id="viewTabs">
-      <button class="tab active" data-view="unrolledText">Unrolled (text only)</button>
-      <button class="tab" data-view="unrolled">Unrolled (rich media)</button>
+      <button class="tab" data-view="unrolledText">Unrolled (text version)</button>
+      <button class="tab active" data-view="unrolled">Unrolled (rich media)</button>
       <button class="tab" data-view="thread">Thread View</button>
     </div>
   </header>
@@ -471,8 +471,36 @@
       const postUrl = document.getElementById('postUrl');
       let lastThread = null;
       let allPosts = []; // Flat array of all posts with metadata
-      let currentView = 'unrolledText';
+      const VIEW_STORAGE_KEY = 'blueskyThreadDefaultView';
+      const DEFAULT_VIEW = 'unrolled';
+      const VALID_VIEWS = new Set(['unrolledText', 'unrolled', 'thread']);
+      let currentView = DEFAULT_VIEW;
       let collapsedPostUris = new Set();
+
+      function normalizeView(value) {
+        if (value === 'text' || value === 'unrolled-text' || value === 'unrolledText') return 'unrolledText';
+        if (value === 'rich' || value === 'media' || value === 'unrolled-rich' || value === 'unrolled') return 'unrolled';
+        if (value === 'thread') return 'thread';
+        return null;
+      }
+
+      function getStoredDefaultView() {
+        try {
+          const stored = normalizeView(localStorage.getItem(VIEW_STORAGE_KEY));
+          return stored && VALID_VIEWS.has(stored) ? stored : null;
+        } catch (err) {
+          return null;
+        }
+      }
+
+      function rememberDefaultView(view) {
+        if (!VALID_VIEWS.has(view)) return;
+        try {
+          localStorage.setItem(VIEW_STORAGE_KEY, view);
+        } catch (err) {
+          // localStorage may be unavailable in private browsing or local file contexts.
+        }
+      }
 
       postUrl.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); form.requestSubmit(); }
@@ -1757,6 +1785,7 @@ ${description}`;
           const view = e.target.dataset.view;
           if (view !== currentView) {
             currentView = view;
+            rememberDefaultView(view);
             viewTabs.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             e.target.classList.add('active');
             // Update URL with current view
@@ -1855,14 +1884,10 @@ ${description}`;
       const params = new URLSearchParams(window.location.search);
       const urlParam = params.get('url');
       const viewParam = params.get('view');
-      // Initialize view from URL parameter if valid
-      if (viewParam === 'unrolledText' || viewParam === 'unrolled' || viewParam === 'thread') {
-        currentView = viewParam;
-      } else if (viewParam === 'text' || viewParam === 'unrolled-text') {
-        currentView = 'unrolledText';
-      } else if (viewParam) {
-        currentView = 'thread';
-      }
+      // Initialize view: explicit URL view wins, then the user's saved default,
+      // then rich-media Unrolled on first use.
+      const normalizedViewParam = normalizeView(viewParam);
+      currentView = normalizedViewParam || getStoredDefaultView() || DEFAULT_VIEW;
       viewTabs.querySelectorAll('.tab').forEach(t => {
         t.classList.toggle('active', t.dataset.view === currentView);
       });
