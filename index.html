@@ -67,7 +67,7 @@
       background: none;
       border: none;
       padding: 0.75em 1.5em;
-      font-size: 1rem;
+      font-size: 0.95rem;
       cursor: pointer;
       border-bottom: 3px solid transparent;
       margin-bottom: -2px;
@@ -108,9 +108,9 @@
       color: #333;
     }
     .collapse-toggle {
+      display: block;
       padding: 0.42em 0.75em;
-      margin-left: auto;
-      margin-right: 0.35em;
+      margin: 0.75em auto 0 0;
       white-space: nowrap;
     }
     .post.collapsed-subthread-hidden {
@@ -201,7 +201,6 @@
       line-height: 1.4;
     }
     .unrolled-card {
-      max-width: 800px;
       border: 1px solid #ccc;
       border-radius: 8px;
       padding: 1em;
@@ -437,7 +436,7 @@
   <header>
     <h1>Bluesky Thread Viewer</h1>
     <p style="line-height:27px">
-      Drag <a href="javascript:(function()%7Bjavascript%3A%20(function()%20%7B%0A%20%20%20%20%20%20%20%20var%20currentUrl%20%3D%20window.location.href%3B%0A%20%20%20%20%20%20%20%20var%20openUrl%20%3D%20%22https%3A%2F%2Fcolarusso.github.io%2Fbluesky-thread%2F%3Furl%3D%22%20%2B%20encodeURIComponent(currentUrl)%3B%0A%20%20%20%20%20%20%20%20window.open(openUrl%2C%20'_blank')%3B%0A%7D)()%3B%7D)()%3B" style="background:#ccc;border-radius: 3px;padding: 4px 8px;">Thread</a> to toolbar to unroll or inspect Bluesky threads from their "first" post.
+      Drag <a href="javascript:(function()%7Bjavascript%3A%20(function()%20%7B%0A%20%20%20%20%20%20%20%20var%20currentUrl%20%3D%20window.location.href%3B%0A%20%20%20%20%20%20%20%20var%20openUrl%20%3D%20%22https%3A%2F%2Fcolarusso.github.io%2Fbluesky-thread%2F%3Furl%3D%22%20%2B%20encodeURIComponent(currentUrl)%3B%0A%20%20%20%20%20%20%20%20window.open(openUrl%2C%20'_blank')%3B%0A%7D)()%3B%7D)()%3B" style="background:#ccc;border-radius: 3px;padding: 4px 8px;">Thread</a> to your toolbar to unroll or inspect Bluesky threads from their "first" post.
     </p>
     <div class="controls">
       <form id="urlForm">
@@ -446,9 +445,9 @@
       </form>
     </div>
     <div class="tabs" id="viewTabs">
-      <button class="tab" data-view="unrolledText">Text</button>
+      <button class="tab" data-view="thread">Thread(s)</button>
       <button class="tab active" data-view="unrolled">Unrolled</button>
-      <button class="tab" data-view="thread">Thread</button>
+      <button class="tab" data-view="unrolledText">Alt-Text</button>
     </div>
   </header>
   <div id="threadContainer"></div>
@@ -1780,7 +1779,7 @@ ${description}`;
         button.setAttribute('aria-expanded', String(!isCollapsed));
       }
 
-      function addCollapseToggle(el, item, metaEl) {
+      function addCollapseToggle(el, item) {
         const hideableReplyCount = getDescendantCount(item.post.uri);
         if (hideableReplyCount === 0) return;
 
@@ -1792,12 +1791,14 @@ ${description}`;
         button.dataset.hideableReplyCount = String(hideableReplyCount);
         button.dataset.descendantCount = String(hideableReplyCount);
         button.setAttribute('aria-controls', getPostId(item.post.uri));
+
         button.addEventListener('click', (e) => {
           e.preventDefault();
           e.stopPropagation();
           toggleCollapsedThread(item.post.uri);
         });
-        metaEl.appendChild(button);
+
+        el.appendChild(button);
       }
 
       function toggleCollapsedThread(uri) {
@@ -1869,7 +1870,7 @@ ${description}`;
 
         const collapseAll = document.createElement('button');
         collapseAll.type = 'button';
-        collapseAll.textContent = 'Collapse all threads';
+        collapseAll.textContent = 'Collapse all';
         collapseAll.addEventListener('click', () => {
           collapsedPostUris.clear();
           // Collapse each original-thread section, not every nested reply.
@@ -1883,7 +1884,7 @@ ${description}`;
 
         const expandAll = document.createElement('button');
         expandAll.type = 'button';
-        expandAll.textContent = 'Expand all threads';
+        expandAll.textContent = 'Expand all';
         expandAll.addEventListener('click', () => {
           collapsedPostUris.clear();
           applyCollapsedThreads();
@@ -1940,7 +1941,6 @@ ${description}`;
         link.textContent = 'View in Bluesky';
         link.target = '_blank';
         metaEl.appendChild(link);
-        addCollapseToggle(el, item, metaEl);
         const textEl = document.createElement('div');
         textEl.className = 'text';
         textEl.appendChild(renderTextWithFacets(item.post.record.text, item.post.record.facets));
@@ -1951,11 +1951,28 @@ ${description}`;
           if (embedEl) el.appendChild(embedEl);
         }
         effectiveParent.appendChild(el);
+
+        addCollapseToggle(el, item);
+
         if (item.replies && item.replies.length) {
+          const repliesEl = document.createElement('div');
+          repliesEl.className = 'replies';
+          el.appendChild(repliesEl);
+
           item.replies.forEach(reply => {
             // If this post was flattened to root, replies to it should be at depth 2
             const nextDepth = shouldFlatten ? 2 : depth + 1;
-            displayPostThread(reply, el, nextDepth, rootAuthorDid, rootContainer, currentAuthorDid, thisPostAtRootLevel, [...effectiveAncestorUris, item.post.uri], effectiveThreadSectionUri);
+            displayPostThread(
+              reply,
+              repliesEl,
+              nextDepth,
+              rootAuthorDid,
+              rootContainer,
+              currentAuthorDid,
+              thisPostAtRootLevel,
+              [...effectiveAncestorUris, item.post.uri],
+              effectiveThreadSectionUri
+            );
           });
         }
       }
