@@ -1216,6 +1216,76 @@
           .join('\n');
       }
 
+      function getDirectEmbeds(value) {
+        const embeds = [];
+        const seen = new WeakSet();
+
+        function remember(embed) {
+          if (!embed || typeof embed !== 'object' || seen.has(embed)) return;
+          seen.add(embed);
+          embeds.push(embed);
+        }
+
+        function collect(node) {
+          if (!node || typeof node !== 'object') return;
+          // Thread items wrap the post object; post objects wrap the raw record.
+          if (node.post) collect(node.post);
+          if (node.embed) remember(node.embed);
+          if (node.record && node.record.embed) remember(node.record.embed);
+          // Quoted view records store the original post payload at value.embed.
+          if (node.value && node.value.embed) remember(node.value.embed);
+          // Hydrated AppView records often expose direct embeds in an embeds array.
+          if (Array.isArray(node.embeds)) node.embeds.forEach(remember);
+        }
+
+        collect(value);
+        return embeds;
+      }
+
+      function extractImageAltTextsFromDirectEmbeds(value) {
+        const altTexts = [];
+        const seenImages = new WeakSet();
+        const seenKeys = new Set();
+
+        function imageKey(image, fallbackIndex) {
+          if (!image || typeof image !== 'object') return `image:${fallbackIndex}`;
+          const source = image.fullsize || image.thumb ||
+            (image.image && image.image.ref && image.image.ref.$link) ||
+            (image.image && image.image.cid) ||
+            '';
+          return source ? `image:${source}` : `image:${fallbackIndex}`;
+        }
+
+        function addImageAlt(image, fallbackIndex) {
+          if (!image || typeof image !== 'object') return;
+          if (seenImages.has(image)) return;
+          seenImages.add(image);
+          const key = imageKey(image, fallbackIndex);
+          if (seenKeys.has(key)) return;
+          seenKeys.add(key);
+          altTexts.push(typeof image.alt === 'string' ? image.alt.trim() : '');
+        }
+
+        function visitDirectEmbed(embed) {
+          if (!embed || typeof embed !== 'object') return;
+          const type = embed.$type;
+
+          if ((type === 'app.bsky.embed.images#view' || type === 'app.bsky.embed.images') && Array.isArray(embed.images)) {
+            embed.images.forEach((image, index) => addImageAlt(image, index));
+            return;
+          }
+
+          if ((type === 'app.bsky.embed.recordWithMedia#view' || type === 'app.bsky.embed.recordWithMedia') && embed.media) {
+            visitDirectEmbed(embed.media);
+          }
+          // Deliberately do not recurse into record/quote embeds. Their media belongs
+          // to the quoted post and is rendered when that quoted post is formatted.
+        }
+
+        getDirectEmbeds(value).forEach(visitDirectEmbed);
+        return altTexts;
+      }
+
       function extractGifDescriptions(value) {
         const descriptions = [];
         const seenObjects = new WeakSet();
@@ -1329,6 +1399,80 @@ ${description}`;
           .join('\n');
       }
 
+      function extractGifDescriptionsFromDirectEmbeds(value) {
+        const descriptions = [];
+        const seenUris = new Set();
+
+        function remember(external) {
+          if (!external || typeof external !== 'object' || !isGifLikeExternal(external)) return;
+          const uri = typeof external.uri === 'string' ? external.uri : '';
+          const key = uri || `${external.title || ''}
+${external.description || ''}`;
+          if (seenUris.has(key)) return;
+          seenUris.add(key);
+          const description = getExternalDescriptionText(external) ||
+            (typeof external.title === 'string' ? external.title.trim() : '') ||
+            uri;
+          descriptions.push(description);
+        }
+
+        function visitDirectEmbed(embed) {
+          if (!embed || typeof embed !== 'object') return;
+          const type = embed.$type;
+          if ((type === 'app.bsky.embed.external#view' || type === 'app.bsky.embed.external') && embed.external) {
+            remember(embed.external);
+            return;
+          }
+          if ((type === 'app.bsky.embed.recordWithMedia#view' || type === 'app.bsky.embed.recordWithMedia') && embed.media) {
+            visitDirectEmbed(embed.media);
+          }
+        }
+
+        getDirectEmbeds(value).forEach(visitDirectEmbed);
+        return descriptions;
+      }
+
+      function extractExternalLinkCardsFromDirectEmbeds(value) {
+        const cards = [];
+        const seenUris = new Set();
+
+        function remember(external) {
+          if (!external || typeof external !== 'object') return;
+          if (isGifLikeExternal(external)) return;
+          const title = typeof external.title === 'string' ? external.title.trim() : '';
+          const description = typeof external.description === 'string' ? external.description.trim() : '';
+          if (!title && !description) return;
+          const uri = typeof external.uri === 'string' ? external.uri : '';
+          const key = uri || `${title}
+${description}`;
+          if (seenUris.has(key)) return;
+          seenUris.add(key);
+          cards.push({ uri, title, description });
+        }
+
+        function visitDirectEmbed(embed) {
+          if (!embed || typeof embed !== 'object') return;
+          const type = embed.$type;
+          if ((type === 'app.bsky.embed.external#view' || type === 'app.bsky.embed.external') && embed.external) {
+            remember(embed.external);
+            return;
+          }
+          if ((type === 'app.bsky.embed.recordWithMedia#view' || type === 'app.bsky.embed.recordWithMedia') && embed.media) {
+            visitDirectEmbed(embed.media);
+          }
+        }
+
+        getDirectEmbeds(value).forEach(visitDirectEmbed);
+        return cards;
+      }
+
+      function externalLinkCardTextFromDirectEmbeds(value) {
+        return extractExternalLinkCardsFromDirectEmbeds(value)
+          .map(formatExternalLinkCard)
+          .filter(Boolean)
+          .join('\n');
+      }
+
       function isReplyToUri(post, parentUri) {
         return !!(post && post.record && post.record.reply &&
           post.record.reply.parent && post.record.reply.parent.uri === parentUri);
@@ -1381,9 +1525,9 @@ ${description}`;
         const handle = author.handle ? ` (@${author.handle})` : '';
         const quotedText = quoted.value && quoted.value.text ? quoted.value.text.trim() : '';
         const quotedLines = quotedText || '[Quoted post has no text]';
-        const quotedLinkCardText = externalLinkCardTextFromValue(quoted);
-        const quotedGifDescriptionText = formatGifDescriptions(extractGifDescriptions(quoted));
-        const quotedAltText = formatImageAltTexts(extractImageAltTexts(quoted));
+        const quotedLinkCardText = externalLinkCardTextFromDirectEmbeds(quoted);
+        const quotedGifDescriptionText = formatGifDescriptions(extractGifDescriptionsFromDirectEmbeds(quoted));
+        const quotedAltText = formatImageAltTexts(extractImageAltTextsFromDirectEmbeds(quoted));
         return [`[Quoted post by ${authorName}${handle}]`, quotedLines, quotedLinkCardText, quotedGifDescriptionText, quotedAltText, '[End quote post]']
           .filter(Boolean)
           .join('\n');
@@ -1460,13 +1604,13 @@ ${description}`;
         const text = (item.post.record.text || '').trim();
         if (text) parts.push(text);
 
-        const imageAltText = formatImageAltTexts(extractImageAltTexts(item.post));
+        const imageAltText = formatImageAltTexts(extractImageAltTextsFromDirectEmbeds(item.post));
         if (imageAltText) parts.push(imageAltText);
 
-        const gifDescriptionText = formatGifDescriptions(extractGifDescriptions(item.post));
+        const gifDescriptionText = formatGifDescriptions(extractGifDescriptionsFromDirectEmbeds(item.post));
         if (gifDescriptionText) parts.push(gifDescriptionText);
 
-        const externalLinkCardText = externalLinkCardTextFromValue(item.post);
+        const externalLinkCardText = externalLinkCardTextFromDirectEmbeds(item.post);
         if (externalLinkCardText) parts.push(externalLinkCardText);
 
         const quotedText = quotedTextFromPost(item.post);
