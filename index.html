@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Bluesky Thread Viewer</title>
+  <title>Unroll and Explore Bluesky Threads</title>
   <style>
     :root {
       --depth-color-1: hsl(200, 70%, 50%);
@@ -434,10 +434,7 @@
     </div>
   </dialog>
   <header>
-    <h1>Bluesky Thread Viewer</h1>
-    <p style="line-height:27px">
-      Drag this <a href="javascript:(function()%7Bjavascript%3A%20(function()%20%7B%0A%20%20%20%20%20%20%20%20var%20currentUrl%20%3D%20window.location.href%3B%0A%20%20%20%20%20%20%20%20var%20openUrl%20%3D%20%22https%3A%2F%2Fcolarusso.github.io%2Fbluesky-thread%2F%3Furl%3D%22%20%2B%20encodeURIComponent(currentUrl)%3B%0A%20%20%20%20%20%20%20%20window.open(openUrl%2C%20'_blank')%3B%0A%7D)()%3B%7D)()%3B" style="background:#ccc;border-radius: 3px;padding: 4px 8px;">Thread</a> bookmarklet to your toolbar to unroll &amp; explore Bluesky threads.
-    </p>
+    <h1>Unroll and Explore Bluesky Threads</h1>
     <div class="controls">
       <form id="urlForm">
         <input type="text" id="postUrl" placeholder="Bluesky post URL" required />
@@ -455,9 +452,12 @@
     <button id="copyBtn">Copy</button>
     <button id="copyJsonBtn">Copy JSON</button>
   </div>
+  <p style="line-height:27px">
+      Drag this <a href="javascript:(function()%7Bjavascript%3A%20(function()%20%7B%0A%20%20%20%20%20%20%20%20var%20currentUrl%20%3D%20window.location.href%3B%0A%20%20%20%20%20%20%20%20var%20openUrl%20%3D%20%22https%3A%2F%2Fcolarusso.github.io%2Fbluesky-thread%2F%3Furl%3D%22%20%2B%20encodeURIComponent(currentUrl)%3B%0A%20%20%20%20%20%20%20%20window.open(openUrl%2C%20'_blank')%3B%0A%7D)()%3B%7D)()%3B" style="background:#ccc;border-radius: 3px;padding: 4px 8px;">Thread</a> bookmarklet to your toolbar to unroll &amp; explore Bluesky threads right from the first post. That is, if you place the bookmarklet in your browser's toolbar, you can click it while in a thread to unroll or explore the thread. The tool will remember your tab preference from its last use, unless overwritten in the URL.
+  </p>
   <div id="footer"
     style="margin-top: 2em; font-size: 0.8rem; color: #666; max-width: 800px;">
-    View on <a href="https://github.com/colarusso/bluesky-thread" target="_blank">GitHub</a>
+    Made by <a href="https://bsky.app/profile/davidcolarusso.com" target="_blank">@davidcolarusso.com</a> | View on <a href="https://github.com/colarusso/bluesky-thread" target="_blank">GitHub</a>
   </div>
   <script>
     (async () => {
